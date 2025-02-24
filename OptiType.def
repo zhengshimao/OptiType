@@ -1,0 +1,160 @@
+Bootstrap: docker
+From: docker.1ms.run/ubuntu:16.04
+
+%labels
+    base.image: ubuntu:16.04
+    version: "4"
+    software: "Biocontainers base Image"
+    software.version: "08252016"
+    description: "Base image for"
+    website: "http://biocontainers.pro"
+    documentation: "https://github.com/BioContainers/specs/wiki"
+    license: "https://github.com/BioContainers/containers/blob/master/LICENSE"
+    tags: "Genomics,Proteomics,Transcriptomics,General,Metabolomics"
+    maintainer: "Felipe da Veiga; Benjamin Schubert <schubert@informatik.uni-tuebingen.de>"
+
+%environment
+    # 设置非交互式安装模式
+    export DEBIAN_FRONTEND=noninteractive
+    # 配置 PATH（包含 OptiType 所在目录）
+    export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/biodocker/bin:/usr/local/bin/OptiType
+    export HOME=/home/biodocker
+    # 设置 LD_LIBRARY_PATH 包含 HDF5 库目录
+    export LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu/hdf5/serial:
+    # 指定 HDF5 安装位置为 libhdf5-dev 的库目录
+    export HDF5_DIR=/usr/lib/x86_64-linux-gnu/hdf5/serial
+
+%post
+    # 开启调试模式
+    set -xe
+
+    # 更换源 # 实际有问题，没改
+    # cp /etc/apt/sources.list /etc/apt/sources.list.bak
+    # sed -i 's|http://[^ ]*|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+
+    # 更新 apt 包列表并安装必需软件包，包括 freetype 和 libpng 开发包
+    apt-get update && apt-get install -y \
+        build-essential \
+        libcurl4-openssl-dev \
+        libssl-dev \
+        libxml2-dev \
+        libhdf5-dev \
+        libfreetype6-dev \
+        libpng12-dev \
+        pkg-config \
+        git \
+        wget \
+        curl \
+        vim \
+        glpk-utils \
+        ca-certificates \
+        libncurses5-dev libbz2-dev liblzma-dev \
+        python2.7 \
+        python-pip \
+        python-dev \
+        && apt-get clean
+
+    # 克隆代码仓库，使用 -c http.sslVerify=false 禁用 SSL 验证
+    git -c http.sslVerify=false clone https://github.com/FRED-2/OptiType.git /usr/local/bin/OptiType
+    git clone https://github.com/seqan/seqan.git /usr/local/src/seqan
+
+    # samtools # 依赖 libncurses5-dev libbz2-dev liblzma-dev
+    wget -c https://github.com/samtools/samtools/releases/download/1.9/samtools-1.9.tar.bz2
+    tar jxvf samtools-1.9.tar.bz2
+    cd samtools-1.9
+    ./configure --prefix=/usr/local/bin/samtools-1.9
+    make
+    make install
+    
+
+    # 设置 HDF5 相关变量：
+    export HDF5_DIR=/usr/lib/x86_64-linux-gnu/hdf5/serial
+    export CFLAGS="-I/usr/include/hdf5/serial"
+    export LDFLAGS="-L/usr/lib/x86_64-linux-gnu/hdf5/serial"
+    export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu/hdf5/serial:$LD_LIBRARY_PATH"
+
+    # 升级 pip 到支持 Python 2.7 的最后一个版本
+    python -m pip install --upgrade pip==20.3.4 -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+
+    # 安装 Python 模块
+    # pip install glpk==0.4.8 -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+    pip install numpy==1.9.3 -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+    pip install pyomo==5.7.0 pyutilib==6.0.0 -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+
+    # 为绕过 build isolation，先安装 numexpr，再设置 PIP_NO_BUILD_ISOLATION
+    pip install numexpr==2.6.0 -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+    export PIP_NO_BUILD_ISOLATION=1
+
+    # 安装 PyTables 时，指定 HDF5 路径
+    pip install tables==3.2.2 --global-option="--hdf5=/usr/lib/x86_64-linux-gnu/hdf5/serial" -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+
+    # 安装其它 Python 模块
+    pip install pandas==0.16.2 -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+    pip install pysam==0.8.3 -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+    pip install matplotlib==1.4.3 -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+    pip install future==0.15.2 -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+
+    # 安装 RazerS3 # 二进制版本
+    wget -c http://packages.seqan.de/razers3/razers3-3.5.8-Linux-x86_64.tar.xz
+    tar -xvf razers3-3.5.8-Linux-x86_64.tar.xz
+    chmod +x razers3-3.5.8-Linux-x86_64/bin/razers3
+    cp razers3-3.5.8-Linux-x86_64/bin/razers3 /usr/local/bin/
+
+    # OptiType config.ini
+    # glpk 不支持多线程
+    echo "[mapping]
+razers3=/usr/local/bin/razers3
+threads=8
+[ilp]
+solver=glpk
+threads=1
+[behavior]
+tempdir=./tmp
+deletebam=true
+unpaired_weight=0
+use_discordant=false" > /usr/local/bin/OptiType/config.ini
+
+    # 修改模块名称:不需要
+    # sed -i 's/from pyutilib.enum import Enum/from enum import Enum/g' /usr/local/lib/python2.7/dist-packages/pyomo/core/base/piecewise.py
+
+    # 创建 /data 和 /config 目录
+    mkdir -p /data /config
+
+    # 添加 fuse 用户组并设置目录权限
+    groupadd fuse
+    chmod -R 777 /data /config
+
+    # 创建 biodocker 用户并设置环境变量
+    useradd -m biodocker
+    echo 'export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/biodocker/bin:/usr/local/bin/OptiType' >> /home/biodocker/.bashrc
+    echo 'export HOME=/home/biodocker' >> /home/biodocker/.bashrc
+    echo 'export LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu/hdf5/serial:' >> /home/biodocker/.bashrc
+    echo 'export HDF5_DIR=/usr/lib/x86_64-linux-gnu/hdf5/serial' >> /home/biodocker/.bashrc
+
+    # 切换到构建时的工作目录
+    cd /data
+
+%runscript
+    #!/bin/bash
+    # 指定解释器，否则可能会报错 /.singularity.d/runscript: 10: /.singularity.d/runscript: Bad substitution
+    # 默认入口点：执行 OptiTypePipeline.py，若无参数则显示帮助信息，否则传递所有参数给脚本
+    if [ "$#" -eq 0 ]; then
+        /usr/local/bin/OptiType/OptiTypePipeline.py -h
+    else
+        # 检查第一个参数，决定调用哪个工具
+        case "$1" in
+            "OptiType")
+                exec /usr/local/bin/OptiType/OptiTypePipeline.py "${@:2}"
+                ;;
+            "razers3")
+                exec /usr/local/bin/razers3 "${@:2}"
+                ;;
+            "samtools")
+                exec /usr/local/bin/samtools-1.9/bin/samtools "${@:2}"
+                ;;
+            *)
+                echo "未知命令: $1"
+                exit 1
+                ;;
+        esac
+    fi
